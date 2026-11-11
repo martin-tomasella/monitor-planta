@@ -320,7 +320,10 @@ async function loadLive() {
   st.assets = assets; st.alarms = open; st.log = log;
   st.tags = new Map(assets.flatMap(a => a.mon_tags.map(t => [t.id, { ...t, asset_name: a.name, line: a.line }])));
   renderLines();
-  if (!st.sel || st.tags.get(st.sel)?.line !== st.line) st.sel = [...st.tags.values()].find(t => t.line === st.line && t.kind === 'analog')?.id;
+  if (!st.sel || st.tags.get(st.sel)?.line !== st.line) {
+    const lt = [...st.tags.values()].filter(t => t.line === st.line && t.kind === 'analog');
+    st.sel = (lt.find(t => t.oee_role === 'rate') ?? lt.find(t => t.hi != null || t.lo != null) ?? lt[0])?.id;
+  }
   renderProcess(); renderAlarms();
   $('updated').textContent = hhmm(new Date(), true);
 }
