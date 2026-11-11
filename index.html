@@ -183,7 +183,8 @@ function fmt(t, v) {
 }
 
 function renderLines() {
-  const lines = [...new Set(st.assets.map(a => a.line))];
+  const lab = l => l.startsWith('Laboratorio');
+  const lines = [...new Set(st.assets.map(a => a.line))].sort((a, b) => lab(a) - lab(b) || a.localeCompare(b, 'es'));
   if (!st.line) st.line = lines[0];
   $('line').innerHTML = lines.map(l => `<option ${l === st.line ? 'selected' : ''}>${esc(l)}</option>`).join('');
 }
