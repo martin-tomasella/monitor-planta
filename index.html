@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monitor de planta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* HMI de alto desempeño (ISA-101): neutro en estado normal, color solo para lo anormal. */
+:root {
+  --bg: #e9eaec; --panel: #f7f7f8; --line: #c9ccd1; --ink: #1d2126; --quiet: #5c636c; --faint: #8b929b;
+  --p1: #c8102e; --p1-bg: #fbe3e6; --p2: #b25e00; --p2-bg: #fdf0dc; --p3: #6b5bb5; --p3-bg: #ecebf8;
+  --ok: #2e7d4f; --trend: #24476b; --band: rgba(36, 71, 107, .14); --stale: #a2a7ae;
+  --mono: "IBM Plex Mono", ui-monospace, monospace; --sans: "IBM Plex Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1b1e22; --panel: #23272c; --line: #3a3f46; --ink: #e6e8eb; --quiet: #a3a9b1; --faint: #7a818a;
+    --p1: #ff5a6e; --p1-bg: #3a1d22; --p2: #f0a040; --p2-bg: #3a2c18; --p3: #a99bf0; --p3-bg: #2a2740;
+    --ok: #5cc28a; --trend: #8fb8e0; --band: rgba(143, 184, 224, .16); --stale: #5d636b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--sans); }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+h1 { font-size: 16px; font-weight: 600; margin: 0; }
+h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--quiet); margin: 0 0 10px; }
+select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover, select:hover { border-color: var(--quiet); }
+button:focus-visible, select:focus-visible, .tag:focus-visible { outline: 2px solid var(--trend); outline-offset: 2px; }
+.meta { color: var(--quiet); font-size: 12px; margin-left: auto; }
+.meta b { font-family: var(--mono); font-weight: 400; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+.dot.off { background: var(--p1); }
+main { padding: 16px 20px 32px; display: grid; gap: 16px; max-width: 1440px; margin: 0 auto; }
+main > *, .grid2 > * { min-width: 0; } /* deja que la franja de proceso scrollee en vez de ensanchar la página */
+@media (max-width: 600px) { main { padding: 12px 12px 24px; } header { padding: 12px; } .meta { margin-left: 0; width: 100%; } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.kpi .v { font: 600 26px/1.1 var(--mono); }
+.kpi .l { color: var(--quiet); font-size: 12px; }
+.kpi .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.kpi .bar i { display: block; height: 100%; background: var(--quiet); }
+.state-run { color: var(--ok); } .state-stop { color: var(--p1); }
+.process { display: flex; gap: 0; overflow-x: auto; padding-bottom: 4px; align-items: stretch; }
+.asset { flex: 0 0 196px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
+.asset.a1 { border: 2px solid var(--p1); } .asset.a2 { border: 2px solid var(--p2); } .asset.a3 { border: 2px solid var(--p3); }
+.asset h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 6px; }
+.arrow { flex: 0 0 22px; display: grid; place-items: center; color: var(--faint); }
+.tag { display: flex; justify-content: space-between; gap: 8px; padding: 4px 6px; margin: 0 -6px; border-radius: 4px; cursor: pointer; }
+.tag:hover, .tag.sel { background: var(--panel); }
+.tag.sel { box-shadow: inset 2px 0 0 var(--trend); }
+.tag .n { color: var(--quiet); font-size: 12px; }
+.tag .x { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+.tag .x small { color: var(--faint); font-size: 11px; }
+.tag.al1 .x { color: var(--p1); font-weight: 600; } .tag.al2 .x { color: var(--p2); font-weight: 600; } .tag.al3 .x { color: var(--p3); font-weight: 600; }
+.tag.stale .x { color: var(--stale); }
+.badge { font: 600 11px/1 var(--mono); padding: 3px 6px; border-radius: 4px; }
+.b1 { background: var(--p1-bg); color: var(--p1); } .b2 { background: var(--p2-bg); color: var(--p2); } .b3 { background: var(--p3-bg); color: var(--p3); }
+.grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+@media (max-width: 960px) { .grid2 { grid-template-columns: 1fr; } }
+.trend-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.trend-head .t { font-weight: 600; } .trend-head .t small { color: var(--quiet); font-weight: 400; margin-left: 6px; }
+.ranges button { padding: 3px 8px; font-size: 12px; } .ranges button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+svg.trend { width: 100%; height: 280px; display: block; }
+svg.trend text { font: 11px var(--mono); fill: var(--faint); }
+#alarms { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--quiet); font-size: 12px; padding: 0 6px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+td.mono { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+tr.unack td:first-child { box-shadow: inset 3px 0 0 currentColor; }
+tr.unack.r1 td:first-child { color: var(--p1); } tr.unack.r2 td:first-child { color: var(--p2); } tr.unack.r3 td:first-child { color: var(--p3); }
+.empty { color: var(--faint); padding: 12px 0; }
+.err { background: var(--p1-bg); color: var(--p1); padding: 8px 12px; border-radius: 6px; display: none; }
+.tabs button { font-size: 12px; padding: 3px 8px; } .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Monitor de planta</h1>
+  <label>Línea <select id="line"></select></label>
+  <span class="meta"><span class="dot" id="dot"></span>Actualizado <b id="updated">—</b></span>
+</header>
+<main>
+  <div class="err" id="err" role="alert"></div>
+
+  <section aria-labelledby="k-h">
+    <h2 id="k-h">Turno de hoy · desde 00:00</h2>
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <section aria-labelledby="p-h">
+    <h2 id="p-h">Proceso · elegí una variable para ver su tendencia</h2>
+    <div class="process" id="process"></div>
+  </section>
+
+  <div class="grid2">
+    <section aria-labelledby="t-h">
+      <h2 id="t-h">Tendencia</h2>
+      <div class="trend-head">
+        <span class="t" id="t-title">—</span>
+        <span class="ranges" id="ranges">
+          <button data-h="1">1 h</button><button data-h="8">8 h</button><button data-h="24" aria-pressed="true">24 h</button><button data-h="168">7 d</button>
+        </span>
+      </div>
+      <svg class="trend" id="trend" role="img" aria-label="Tendencia de la variable seleccionada"></svg>
+    </section>
+
+    <section aria-labelledby="a-h">
+      <h2 id="a-h">Alarmas</h2>
+      <div class="tabs" style="margin-bottom:10px">
+        <button data-view="open" aria-pressed="true">Pendientes <span id="open-n"></span></button>
+        <button data-view="log">Historial 24 h</button>
+      </div>
+      <div id="alarms"></div>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+// Clave pública (anon): solo lectura de tablas mon_ por RLS. No es un secreto.
+const URL = 'https://xwkkixxxlkudnyczvqfz.supabase.co/rest/v1';
+const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3a2tpeHh4bGt1ZG55Y3p2cWZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwOTQyNzEsImV4cCI6MjA3OTY3MDI3MX0.PO5_jaNGlz2HxkKaQ2JEpg8x3WYOk_3vvgfW8UO0anY';
+const STALE_MS = 120_000; // sin datos en 2 min = valor gris
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hhmm = (d, s) => new Date(d).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: s ? '2-digit' : undefined, hourCycle: 'h23' });
+const when = d => { const t = new Date(d); return (Date.now() - t < 864e5 ? '' : t.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) + ' ') + hhmm(t); };
+const pct = x => x == null ? '—' : (x * 100).toFixed(1) + ' %';
+const num = (x, d = 1) => x == null ? '—' : Number(x).toLocaleString('es-AR', { maximumFractionDigits: d });
+
+async function api(path, body) {
+  const r = await fetch(URL + path, {
+    method: body ? 'POST' : 'GET',
+    headers: { apikey: KEY, Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' },
+    body: body && JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.status === 204 ? null : r.json();
+}
+
+const st = { assets: [], tags: new Map(), line: null, sel: null, hours: 24, view: 'open', alarms: [], log: [] };
+
+function fmt(t, v) {
+  if (v == null) return '—';
+  if (t.kind === 'digital') return t.alarm_on === 1 ? (v === 1 ? 'Falla' : 'Normal') : (v === 1 ? 'Sí' : 'No');
+  return num(v, t.kind === 'counter' ? 0 : 1) + (t.unit ? ` <small>${esc(t.unit)}</small>` : '');
+}
+
+function renderLines() {
+  const lines = [...new Set(st.assets.map(a => a.line))];
+  if (!st.line) st.line = lines[0];
+  $('line').innerHTML = lines.map(l => `<option ${l === st.line ? 'selected' : ''}>${esc(l)}</option>`).join('');
+}
+
+function renderProcess() {
+  const active = new Map(); // tag -> prioridad de alarma activa
+  for (const a of st.alarms) if (!a.cleared_at) active.set(a.tag_id, Math.min(active.get(a.tag_id) ?? 9, a.priority));
+  const assets = st.assets.filter(a => a.line === st.line);
+  $('process').innerHTML = assets.map((a, i) => {
+    const pr = Math.min(9, ...a.mon_tags.map(t => active.get(t.id) ?? 9));
+    const tags = a.mon_tags.sort((x, y) => x.id.localeCompare(y.id)).map(t => {
+      const stale = !t.last_ts || Date.now() - new Date(t.last_ts) > STALE_MS;
+      const p = active.get(t.id);
+      return `<div class="tag ${p ? 'al' + p : ''} ${stale ? 'stale' : ''} ${st.sel === t.id ? 'sel' : ''}" tabindex="0" role="button" data-tag="${esc(t.id)}"
+                title="${esc(t.id)}${stale ? ' · sin datos recientes' : ''}"><span class="n">${esc(t.name)}</span><span class="x">${fmt(t, t.last_value)}</span></div>`;
+    }).join('');
+    return (i ? '<div class="arrow" aria-hidden="true">→</div>' : '') +
+      `<div class="asset ${pr < 9 ? 'a' + pr : ''}"><h3><span>${esc(a.name)}</span>${pr < 9 ? `<span class="badge b${pr}">P${pr}</span>` : ''}</h3>${tags}</div>`;
+  }).join('');
+}
+
+async function loadKpis() {
+  const lineTags = st.assets.filter(a => a.line === st.line).flatMap(a => a.mon_tags);
+  if (!lineTags.some(t => t.oee_role)) { $('kpis').innerHTML = '<div class="empty">Esta línea no tiene variables de OEE configuradas.</div>'; return; }
+  const from = new Date(); from.setHours(0, 0, 0, 0);
+  const k = await api('/rpc/mon_oee', { p_line: st.line, p_from: from.toISOString() });
+  const run = lineTags.find(t => t.oee_role === 'run');
+  const bar = x => `<div class="bar"><i style="width:${Math.max(0, Math.min(1, x ?? 0)) * 100}%"></i></div>`;
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="v ${run?.last_value === 1 ? 'state-run' : 'state-stop'}">${run?.last_value === 1 ? 'En marcha' : 'Detenida'}</div><div class="l">Estado de la línea</div></div>
+    <div class="kpi"><div class="v">${pct(k.oee)}</div><div class="l">OEE</div>${bar(k.oee)}</div>
+    <div class="kpi"><div class="v">${pct(k.availability)}</div><div class="l">Disponibilidad</div>${bar(k.availability)}</div>
+    <div class="kpi"><div class="v">${pct(k.performance)}</div><div class="l">Rendimiento · nominal ${num(k.nominal_rate, 0)}/min</div>${bar(k.performance)}</div>
+    <div class="kpi"><div class="v">${pct(k.quality)}</div><div class="l">Calidad</div>${bar(k.quality)}</div>
+    <div class="kpi"><div class="v">${num(k.produced, 0)}</div><div class="l">Producidas</div></div>
+    <div class="kpi"><div class="v">${num(k.rejected, 0)}</div><div class="l">Rechazadas</div></div>`;
+}
+
+function renderAlarms() {
+  const rows = st.view === 'open' ? st.alarms : st.log;
+  $('open-n').textContent = st.alarms.length ? `(${st.alarms.length})` : '';
+  if (!rows.length) { $('alarms').innerHTML = `<div class="empty">${st.view === 'open' ? 'Sin alarmas pendientes.' : 'Sin alarmas en las últimas 24 h.'}</div>`; return; }
+  $('alarms').innerHTML = `<table><thead><tr><th>Prio.</th><th>Alarma</th><th>Inicio</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map(a => {
+    const t = st.tags.get(a.tag_id);
+    const state = !a.cleared_at ? 'Activa' : a.acked_at ? `Normal ${hhmm(a.cleared_at)}` : 'Sin reconocer';
+    return `<tr class="r${a.priority} ${a.acked_at ? '' : 'unack'}">
+      <td><span class="badge b${a.priority}">P${a.priority}</span></td>
+      <td>${esc(a.message)}<br><span class="n" style="color:var(--quiet);font-size:12px">${esc(t?.asset_name ?? '')} · ${fmt(t ?? {}, a.value)}</span></td>
+      <td class="mono">${when(a.raised_at)}</td><td>${state}</td>
+      <td>${a.acked_at ? '' : `<button data-ack="${a.id}">Reconocer</button>`}</td></tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+async function loadTrend() {
+  const t = st.tags.get(st.sel);
+  if (!t) return;
+  $('t-title').innerHTML = `${esc(t.name)}<small>${esc(t.asset_name)}${t.unit ? ' · ' + esc(t.unit) : ''}</small>`;
+  const to = new Date(), from = new Date(to - st.hours * 36e5);
+  const pts = await api('/rpc/mon_trend', { p_tag: t.id, p_from: from.toISOString(), p_to: to.toISOString(), p_points: 300 });
+  const svg = $('trend'), W = svg.clientWidth || 600, H = 280, L = 52, R = 12, T = 12, B = 26;
+  if (!pts.length) { svg.innerHTML = `<text x="${L}" y="${H / 2}">Sin datos en el período</text>`; return; }
+  let lo = Math.min(...pts.map(p => p.vmin), t.lo ?? Infinity), hi = Math.max(...pts.map(p => p.vmax), t.hi ?? -Infinity);
+  if (t.kind === 'digital') { lo = -0.1; hi = 1.1; }
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const X = d => L + (new Date(d) - from) / (to - from) * (W - L - R);
+  const Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const step = t.kind === 'digital'; // los digitales se dibujan en escalón
+  const line = pts.map((p, i) => (i ? (step ? `H${X(p.ts).toFixed(1)}V` : `L${X(p.ts).toFixed(1)},`) : `M${X(p.ts).toFixed(1)},`) + Y(p.v).toFixed(1)).join('');
+  const band = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.ts).toFixed(1)},${Y(p.vmax).toFixed(1)}`).join('') +
+    pts.slice().reverse().map(p => `L${X(p.ts).toFixed(1)},${Y(p.vmin).toFixed(1)}`).join('') + 'Z';
+  const ticksY = step ? [0, 1] : Array.from({ length: 5 }, (_, i) => lo + pad + (hi - lo - 2 * pad) * i / 4);
+  const ticksX = Array.from({ length: 6 }, (_, i) => new Date(+from + (to - from) * i / 5));
+  const limit = (v, c, label) => v == null ? '' : `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${c}" stroke-dasharray="5 4"/><text x="${W - R}" y="${Y(v) - 4}" text-anchor="end" style="fill:${c}">${label} ${num(v)}</text>`;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('aria-label', `Tendencia de ${t.name}, últimas ${st.hours} horas`);
+  svg.innerHTML = `
+    ${ticksY.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${step ? (v ? 'Sí' : 'No') : num(v)}</text>`).join('')}
+    ${ticksX.map(d => `<text x="${X(d)}" y="${H - 6}" text-anchor="middle">${st.hours > 24 ? d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) : hhmm(d)}</text>`).join('')}
+    ${step ? '' : `<path d="${band}" fill="var(--band)"/>`}
+    ${limit(t.hi, 'var(--p2)', 'Alto')}${limit(t.lo, 'var(--p2)', 'Bajo')}
+    <path d="${line}" fill="none" stroke="var(--trend)" stroke-width="1.6" stroke-linejoin="round"/>`;
+}
+
+async function loadLive() {
+  const since = new Date(Date.now() - 864e5).toISOString();
+  const [assets, open, log] = await Promise.all([
+    api('/mon_assets?select=*,mon_tags(*)&order=sort'),
+    api('/mon_alarms?or=(cleared_at.is.null,acked_at.is.null)&order=priority,raised_at.desc'),
+    api(`/mon_alarms?raised_at=gte.${since}&order=raised_at.desc&limit=100`),
+  ]);
+  st.assets = assets; st.alarms = open; st.log = log;
+  st.tags = new Map(assets.flatMap(a => a.mon_tags.map(t => [t.id, { ...t, asset_name: a.name, line: a.line }])));
+  renderLines();
+  if (!st.sel || st.tags.get(st.sel)?.line !== st.line) st.sel = [...st.tags.values()].find(t => t.line === st.line && t.kind === 'analog')?.id;
+  renderProcess(); renderAlarms();
+  $('updated').textContent = hhmm(new Date(), true);
+}
+
+async function guard(fn) {
+  try { await fn(); $('err').style.display = 'none'; $('dot').classList.remove('off'); }
+  catch (e) { $('err').textContent = 'Sin conexión con el servidor: ' + e.message; $('err').style.display = 'block'; $('dot').classList.add('off'); }
+}
+
+// Eventos
+$('process').addEventListener('click', e => { const el = e.target.closest('[data-tag]'); if (el) { st.sel = el.dataset.tag; renderProcess(); guard(loadTrend); } });
+$('process').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset.tag) { e.preventDefault(); e.target.click(); } });
+$('line').addEventListener('change', e => { st.line = e.target.value; st.sel = null; guard(async () => { await loadLive(); await Promise.all([loadKpis(), loadTrend()]); }); });
+$('ranges').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st.hours = +b.dataset.h;
+  for (const x of $('ranges').children) x.setAttribute('aria-pressed', x === b); guard(loadTrend); });
+document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st.view = b.dataset.view;
+  for (const x of b.parentNode.children) x.setAttribute('aria-pressed', x === b); renderAlarms(); });
+$('alarms').addEventListener('click', e => { const b = e.target.closest('[data-ack]'); if (!b) return; b.disabled = true;
+  guard(async () => { await api('/rpc/mon_ack', { p_id: +b.dataset.ack }); await loadLive(); }); });
+addEventListener('resize', () => guard(loadTrend));
+
+// Ciclo: vivo cada 5 s, KPIs y tendencia cada 30 s.
+await guard(async () => { await loadLive(); await Promise.all([loadKpis(), loadTrend()]); });
+setInterval(() => guard(loadLive), 5000);
+setInterval(() => guard(() => Promise.all([loadKpis(), loadTrend()])), 30000);
+</script>
+</body>
+</html>
