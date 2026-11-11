@@ -73,6 +73,27 @@ tr.unack.r1 td:first-child { color: var(--p1); } tr.unack.r2 td:first-child { co
 .empty { color: var(--faint); padding: 12px 0; }
 .err { background: var(--p1-bg); color: var(--p1); padding: 8px 12px; border-radius: 6px; display: none; }
 .tabs button { font-size: 12px; padding: 3px 8px; } .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.notice { margin-bottom: 8px; color: var(--quiet); border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; font-size: 13px; }
+.notice b { color: var(--ink); }
+/* Pantalla de escritorio: todo entra en la ventana, sin scroll de página. Solo la lista de alarmas scrollea por dentro. */
+@media (min-width: 900px) and (min-height: 560px) {
+  body { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { padding: 8px 16px; }
+  main { flex: 1; min-height: 0; width: 100%; max-width: none; padding: 10px 16px 12px; gap: 10px; grid-template-rows: auto auto minmax(0, 1fr); }
+  section { padding: 10px 12px; }
+  h2 { margin-bottom: 6px; }
+  .kpi .v { font-size: 20px; }
+  .process { overflow: hidden; padding-bottom: 0; }
+  .asset { flex: 1 1 0; min-width: 0; max-width: 300px; padding: 8px 10px; }
+  .asset h3 { font-size: 12.5px; margin-bottom: 4px; }
+  .arrow { flex: 0 0 14px; }
+  .tag { padding: 2px 6px; } .tag .n { font-size: 11.5px; } .tag .x { font-size: 12px; }
+  .grid2 { min-height: 0; gap: 10px; }
+  .grid2 > section { display: flex; flex-direction: column; min-height: 0; }
+  svg.trend { flex: 1; height: auto; min-height: 120px; }
+  #alarms { flex: 1; min-height: 0; overflow: auto; }
+  td { padding: 5px 6px; }
+}
 </style>
 </head>
 <body>
@@ -91,6 +112,7 @@ tr.unack.r1 td:first-child { color: var(--p1); } tr.unack.r2 td:first-child { co
 
   <section aria-labelledby="p-h">
     <h2 id="p-h">Proceso · elegí una variable para ver su tendencia</h2>
+    <div class="notice" id="notice" hidden></div>
     <div class="process" id="process"></div>
   </section>
 
@@ -158,6 +180,12 @@ function renderProcess() {
   const active = new Map(); // tag -> prioridad de alarma activa
   for (const a of st.alarms) if (!a.cleared_at) active.set(a.tag_id, Math.min(active.get(a.tag_id) ?? 9, a.priority));
   const assets = st.assets.filter(a => a.line === st.line);
+  const waiting = assets.every(a => a.mon_tags.every(t => !t.last_ts));
+  const gw = assets[0]?.mon_tags[0]?.source?.gateway;
+  $('notice').innerHTML = waiting ? `<b>Esta línea todavía no recibió datos.</b> La alimenta el gateway <code>${esc(gw ?? '—')}</code>:
+    el colector lee el PLC por ${esc(assets[0]?.mon_tags[0]?.source?.protocol ?? '—')} y envía a Supabase. Se activa al levantar el colector
+    (en EasyPanel o en un equipo de la planta); las variables ya están configuradas y aparecen solas.` : '';
+  $('notice').hidden = !waiting;
   $('process').innerHTML = assets.map((a, i) => {
     const pr = Math.min(9, ...a.mon_tags.map(t => active.get(t.id) ?? 9));
     const tags = a.mon_tags.sort((x, y) => x.id.localeCompare(y.id)).map(t => {
@@ -189,8 +217,9 @@ async function loadKpis() {
 }
 
 function renderAlarms() {
-  const rows = st.view === 'open' ? st.alarms : st.log;
-  $('open-n').textContent = st.alarms.length ? `(${st.alarms.length})` : '';
+  const mine = a => st.tags.get(a.tag_id)?.line === st.line;
+  const open = st.alarms.filter(mine), rows = st.view === 'open' ? open : st.log.filter(mine);
+  $('open-n').textContent = open.length ? `(${open.length})` : '';
   if (!rows.length) { $('alarms').innerHTML = `<div class="empty">${st.view === 'open' ? 'Sin alarmas pendientes.' : 'Sin alarmas en las últimas 24 h.'}</div>`; return; }
   $('alarms').innerHTML = `<table><thead><tr><th>Prio.</th><th>Alarma</th><th>Inicio</th><th>Estado</th><th></th></tr></thead><tbody>${rows.map(a => {
     const t = st.tags.get(a.tag_id);
@@ -209,7 +238,7 @@ async function loadTrend() {
   $('t-title').innerHTML = `${esc(t.name)}<small>${esc(t.asset_name)}${t.unit ? ' · ' + esc(t.unit) : ''}</small>`;
   const to = new Date(), from = new Date(to - st.hours * 36e5);
   const pts = await api('/rpc/mon_trend', { p_tag: t.id, p_from: from.toISOString(), p_to: to.toISOString(), p_points: 300 });
-  const svg = $('trend'), W = svg.clientWidth || 600, H = 280, L = 52, R = 12, T = 12, B = 26;
+  const svg = $('trend'), W = svg.clientWidth || 600, H = svg.clientHeight || 280, L = 52, R = 12, T = 12, B = 26;
   if (!pts.length) { svg.innerHTML = `<text x="${L}" y="${H / 2}">Sin datos en el período</text>`; return; }
   let lo = Math.min(...pts.map(p => p.vmin), t.lo ?? Infinity), hi = Math.max(...pts.map(p => p.vmax), t.hi ?? -Infinity);
   if (t.kind === 'digital') { lo = -0.1; hi = 1.1; }
@@ -228,7 +257,7 @@ async function loadTrend() {
   svg.setAttribute('aria-label', `Tendencia de ${t.name}, últimas ${st.hours} horas`);
   svg.innerHTML = `
     ${ticksY.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${step ? (v ? 'Sí' : 'No') : num(v)}</text>`).join('')}
-    ${ticksX.map(d => `<text x="${X(d)}" y="${H - 6}" text-anchor="middle">${st.hours > 24 ? d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) : hhmm(d)}</text>`).join('')}
+    ${ticksX.map(d => `<text x="${X(d)}" y="${H - 6}" text-anchor="${d === ticksX[0] ? 'start' : d === ticksX.at(-1) ? 'end' : 'middle'}">${st.hours > 24 ? d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' }) : hhmm(d)}</text>`).join('')}
     ${step ? '' : `<path d="${band}" fill="var(--band)"/>`}
     ${limit(t.hi, 'var(--p2)', 'Alto')}${limit(t.lo, 'var(--p2)', 'Bajo')}
     <path d="${line}" fill="none" stroke="var(--trend)" stroke-width="1.6" stroke-linejoin="round"/>`;
