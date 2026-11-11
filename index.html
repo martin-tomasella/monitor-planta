@@ -40,6 +40,17 @@ section { background: var(--panel); border: 1px solid var(--line); border-radius
 .kpi .l { color: var(--quiet); font-size: 12px; }
 .kpi .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
 .kpi .bar i { display: block; height: 100%; background: var(--quiet); }
+.kpi .v small { font-size: 12px; color: var(--faint); font-weight: 400; }
+.band:empty { display: none; }
+.band { margin-top: 10px; }
+.band .lbl { display: flex; justify-content: space-between; font-size: 12px; color: var(--quiet); }
+.track { position: relative; height: 10px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 4px 0 2px; }
+.track i { position: absolute; top: 0; bottom: 0; }
+.track i.on { background: var(--ok); opacity: .35; }
+.track i.stop { background: var(--p1); }
+.ticks { position: relative; height: 13px; font: 10.5px var(--mono); color: var(--faint); }
+.ticks span { position: absolute; transform: translateX(-50%); }
+.ticks span:first-child { transform: none; } .ticks span:last-child { transform: translateX(-100%); }
 .state-run { color: var(--ok); } .state-stop { color: var(--p1); }
 .process { display: flex; gap: 0; overflow-x: auto; padding-bottom: 4px; align-items: stretch; }
 .asset { flex: 0 0 196px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
@@ -108,6 +119,7 @@ tr.unack.r1 td:first-child { color: var(--p1); } tr.unack.r2 td:first-child { co
   <section aria-labelledby="k-h">
     <h2 id="k-h">Turno de hoy · desde 00:00</h2>
     <div class="kpis" id="kpis"></div>
+    <div class="band" id="band"></div>
   </section>
 
   <section aria-labelledby="p-h">
@@ -201,10 +213,15 @@ function renderProcess() {
 
 async function loadKpis() {
   const lineTags = st.assets.filter(a => a.line === st.line).flatMap(a => a.mon_tags);
-  if (!lineTags.some(t => t.oee_role)) { $('kpis').innerHTML = '<div class="empty">Esta línea no tiene variables de OEE configuradas.</div>'; return; }
   const from = new Date(); from.setHours(0, 0, 0, 0);
-  const k = await api('/rpc/mon_oee', { p_line: st.line, p_from: from.toISOString() });
   const run = lineTags.find(t => t.oee_role === 'run');
+  if (!run) return loadSummary(from);
+  const now = new Date(), mins = Math.max(1, Math.round((now - from) / 6e4));
+  const [k, states] = await Promise.all([
+    api('/rpc/mon_oee', { p_line: st.line, p_from: from.toISOString() }),
+    api('/rpc/mon_trend', { p_tag: run.id, p_from: from.toISOString(), p_to: now.toISOString(), p_points: mins }),
+  ]);
+  renderBand(from, now, states, (now - from) / mins);
   const bar = x => `<div class="bar"><i style="width:${Math.max(0, Math.min(1, x ?? 0)) * 100}%"></i></div>`;
   $('kpis').innerHTML = `
     <div class="kpi"><div class="v ${run?.last_value === 1 ? 'state-run' : 'state-stop'}">${run?.last_value === 1 ? 'En marcha' : 'Detenida'}</div><div class="l">Estado de la línea</div></div>
@@ -214,6 +231,36 @@ async function loadKpis() {
     <div class="kpi"><div class="v">${pct(k.quality)}</div><div class="l">Calidad</div>${bar(k.quality)}</div>
     <div class="kpi"><div class="v">${num(k.produced, 0)}</div><div class="l">Producidas</div></div>
     <div class="kpi"><div class="v">${num(k.rejected, 0)}</div><div class="l">Rechazadas</div></div>`;
+}
+
+// Franja del día: tramos detenidos en rojo sobre el tiempo transcurrido (00:00 → 24:00).
+function renderBand(from, now, states, step) { // step = ancho del bucket de mon_trend (~1 min)
+  const DAY = 864e5, X = t => (new Date(t) - from) / DAY * 100;
+  const segs = [];
+  for (let i = 0; i < states.length; i++) {
+    if (states[i].v >= 0.5) continue;
+    const a = new Date(states[i].ts), b = new Date(+a + step);
+    const last = segs.at(-1);
+    if (last && a - last.b < step * 1.5) last.b = b; else segs.push({ a, b });
+  }
+  const stopMin = Math.round(segs.reduce((s, x) => s + (x.b - x.a), 0) / 6e4);
+  $('band').innerHTML = `
+    <div class="lbl"><span>Estado de la línea hoy</span><span>${segs.length} paradas · ${stopMin} min detenida</span></div>
+    <div class="track"><i class="on" style="left:0;width:${X(now)}%"></i>${segs.map(s =>
+      `<i class="stop" style="left:${X(s.a)}%;width:${Math.max(0.15, X(s.b) - X(s.a))}%" title="Detenida ${hhmm(s.a)}–${hhmm(s.b)}"></i>`).join('')}</div>
+    <div class="ticks">${[0, 6, 12, 18, 24].map(h => `<span style="left:${h / 24 * 100}%">${String(h).padStart(2, '0')}:00</span>`).join('')}</div>`;
+}
+
+// Líneas sin OEE: contadores del día primero, después valores actuales con promedio y máximo del día.
+async function loadSummary(from) {
+  $('band').innerHTML = '';
+  const rows = await api('/rpc/mon_line_summary', { p_line: st.line, p_from: from.toISOString() });
+  const order = { counter: 0, analog: 1, digital: 2 };
+  rows.sort((a, b) => order[a.kind] - order[b.kind]);
+  $('kpis').innerHTML = rows.slice(0, 8).map(r => r.kind === 'counter'
+    ? `<div class="kpi"><div class="v">${num(r.delta, 0)}${r.unit ? ` <small>${esc(r.unit)}</small>` : ''}</div><div class="l">${esc(r.name)} · hoy</div></div>`
+    : `<div class="kpi"><div class="v">${fmt(r, r.last)}</div><div class="l">${esc(r.name)}${r.kind === 'analog' && r.avg != null ? ` · prom. ${num(r.avg)} · máx ${num(r.max)}` : ''}</div></div>`
+  ).join('') || '<div class="empty">Sin variables.</div>';
 }
 
 function renderAlarms() {
